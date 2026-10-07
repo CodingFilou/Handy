@@ -883,6 +883,14 @@ async getSelectedSystemDevice() : Promise<Result<string, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async testSystemCapture() : Promise<Result<SystemCaptureTest, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("test_system_capture") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async setModelUnloadTimeout(timeout: ModelUnloadTimeout) : Promise<void> {
     await TAURI_INVOKE("set_model_unload_timeout", { timeout });
 },
@@ -1218,6 +1226,7 @@ export type ShortcutActivation =
 "hold_or_toggle"
 export type ShortcutBinding = { id: string; name: string; description: string; default_binding: string; current_binding: string }
 export type SoundTheme = "marimba" | "pop" | "custom"
+export type SystemCaptureTest = { ok: boolean; rms: number; peak: number; seconds: number; message: string }
 /**
  * Phase of the streaming overlay card, emitted to drive its UI state.
  */

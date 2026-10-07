@@ -253,7 +253,9 @@
         "title": "System audio device",
         "description": "Which output device to capture when system audio is part of the audio source",
         "placeholder": "Select system device...",
-        "loading": "Loading..."
+        "loading": "Loading...",
+        "test": "Test capture",
+        "testing": "Testing… (play something now)"
       },
       "channel": {
         "title": "Input Channel",

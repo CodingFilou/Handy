@@ -253,7 +253,9 @@
         "title": "System-Audio-Gerät",
         "description": "Welches Ausgabegerät aufgenommen wird, wenn System-Audio zur Audioquelle gehört",
         "placeholder": "System-Gerät auswählen...",
-        "loading": "Wird geladen..."
+        "loading": "Wird geladen...",
+        "test": "Aufnahme testen",
+        "testing": "Teste… (jetzt etwas abspielen)"
       },
       "channel": {
         "title": "Eingangskanal",

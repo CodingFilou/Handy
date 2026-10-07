@@ -1,9 +1,10 @@
-import React from "react";
+import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Dropdown } from "../ui/Dropdown";
 import { SettingContainer } from "../ui/SettingContainer";
 import { ResetButton } from "../ui/ResetButton";
 import { useSettings } from "../../hooks/useSettings";
+import { commands } from "@/bindings";
 import type { AudioDevice } from "@/bindings";
 
 interface SystemDeviceSelectorProps {
@@ -47,6 +48,31 @@ export const SystemDeviceSelector: React.FC<SystemDeviceSelectorProps> =
       label: device.name,
     }));
 
+    const [testing, setTesting] = useState(false);
+    const [testResult, setTestResult] = useState<string | null>(null);
+    const [testOk, setTestOk] = useState<boolean | null>(null);
+
+    const handleTest = async () => {
+      setTesting(true);
+      setTestResult(null);
+      setTestOk(null);
+      try {
+        const result = await commands.testSystemCapture();
+        if (result.status === "ok") {
+          setTestOk(true);
+          setTestResult(result.data.message);
+        } else {
+          setTestOk(false);
+          setTestResult(result.error);
+        }
+      } catch (e) {
+        setTestOk(false);
+        setTestResult(e instanceof Error ? e.message : String(e));
+      } finally {
+        setTesting(false);
+      }
+    };
+
     return (
       <SettingContainer
         title={t("settings.sound.systemDevice.title")}
@@ -75,7 +101,24 @@ export const SystemDeviceSelector: React.FC<SystemDeviceSelectorProps> =
             onClick={handleReset}
             disabled={isUpdating("selected_system_device") || isLoading}
           />
+          <button
+            type="button"
+            onClick={handleTest}
+            disabled={testing || isLoading}
+            className="px-2 py-[5px] text-sm font-semibold bg-mid-gray/10 border border-mid-gray/80 rounded-md hover:bg-logo-primary/10 hover:border-logo-primary disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {testing
+              ? t("settings.sound.systemDevice.testing")
+              : t("settings.sound.systemDevice.test")}
+          </button>
         </div>
+        {testResult !== null && (
+          <div
+            className={`text-sm mt-1 ${testOk ? "text-green-600" : "text-red-500"}`}
+          >
+            {testResult}
+          </div>
+        )}
       </SettingContainer>
     );
   });

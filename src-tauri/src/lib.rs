@@ -763,6 +763,7 @@ pub fn run(cli_args: CliArgs) {
             commands::audio::get_available_system_devices,
             commands::audio::set_selected_system_device,
             commands::audio::get_selected_system_device,
+            commands::audio::test_system_capture,
             commands::transcription::set_model_unload_timeout,
             commands::transcription::get_model_load_status,
             commands::transcription::unload_model_manually,

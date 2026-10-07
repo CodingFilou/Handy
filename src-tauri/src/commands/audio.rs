@@ -4,6 +4,7 @@ use crate::audio_toolkit::audio::list_system_devices;
 use crate::audio_toolkit::audio::{
     list_input_devices, list_output_devices, system_capture_supported, AudioRecorder,
 };
+use crate::audio_toolkit::{LoopbackRecorder, VadPolicy};
 use crate::managers::audio::{AudioRecordingManager, MicrophoneMode};
 use crate::settings::{get_settings, write_settings, AudioSource};
 use log::warn;
@@ -500,4 +501,75 @@ pub fn get_selected_system_device(app: AppHandle) -> Result<String, String> {
     Ok(settings
         .selected_system_device
         .unwrap_or_else(|| "default".to_string()))
+}
+
+/// One-shot self-test result for system-audio capture.
+#[derive(Serialize, Deserialize, Debug, Clone, Type)]
+pub struct SystemCaptureTest {
+    /// Capture ran and returned audio (regardless of level).
+    pub ok: bool,
+    /// RMS level of the captured snippet (0.0 = digital silence).
+    pub rms: f32,
+    /// Peak absolute sample of the captured snippet.
+    pub peak: f32,
+    /// Captured seconds (16 kHz mono).
+    pub seconds: f32,
+    /// Human-readable outcome, already naming the failing step on error.
+    pub message: String,
+}
+
+/// Records ~1.5 s from the configured system-audio device and reports the
+/// level. Lets users verify loopback capture in settings (ideally while
+/// something plays) without starting a real recording — and surfaces the
+/// exact backend error when capture fails. Needs no model: VAD is bypassed.
+#[tauri::command]
+#[specta::specta]
+pub async fn test_system_capture(app: AppHandle) -> Result<SystemCaptureTest, String> {
+    let device_name = get_settings(&app).selected_system_device;
+    tokio::task::spawn_blocking(move || {
+        let mut recorder =
+            LoopbackRecorder::new().map_err(|e| format!("Failed to prepare capture: {e}"))?;
+        recorder
+            .open(device_name.clone())
+            .map_err(|e| format!("Failed to open system audio ({what}): {e}", what = device_name.as_deref().unwrap_or("default output")))?;
+        let _ready = recorder
+            .start(VadPolicy::Disabled)
+            .map_err(|e| format!("Failed to start system-audio capture: {e}"))?;
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let samples = recorder
+            .stop()
+            .map_err(|e| format!("Failed to finish system-audio capture: {e}"))?;
+        let _ = recorder.close();
+
+        let n = samples.len();
+        let (rms, peak) = if n == 0 {
+            (0.0, 0.0)
+        } else {
+            let sum_sq: f64 = samples.iter().map(|s| (*s as f64) * (*s as f64)).sum();
+            (
+                (sum_sq / n as f64).sqrt() as f32,
+                samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max),
+            )
+        };
+        let seconds = n as f32 / 16000.0;
+        let message = if n == 0 {
+            "Capture ran but returned no audio. Is something playing on the selected output?"
+                .to_string()
+        } else if rms < 0.005 {
+            format!(
+                "System audio works, but it is (near) silent ({seconds:.1}s captured). Play something and test again."
+            )
+        } else {
+            format!("System audio works ({seconds:.1}s captured, level {rms:.3} RMS).")
+        };
+        Ok::<_, String>(SystemCaptureTest {
+            ok: true,
+            rms,
+            peak,
+            seconds,
+            message,
+        })
+    })
+    .await
+    .map_err(|e| format!("audio task join failed: {e}"))?
 }
