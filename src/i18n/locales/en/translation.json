@@ -237,6 +237,20 @@
         "placeholder": "Select microphone...",
         "loading": "Loading..."
       },
+      "audioSource": {
+        "title": "Audio source",
+        "description": "Choose what gets transcribed: your microphone, the computer's own sound (meetings, calls, media), or both mixed together. System audio capture works on Windows (WASAPI loopback); on Linux pick the 'Monitor of …' input as microphone, on macOS use a virtual audio device.",
+        "placeholder": "Select audio source...",
+        "microphone": "Microphone",
+        "system": "System audio (computer sound)",
+        "both": "Microphone + system audio"
+      },
+      "systemDevice": {
+        "title": "System audio device",
+        "description": "Which output device to capture when system audio is part of the audio source",
+        "placeholder": "Select system device...",
+        "loading": "Loading..."
+      },
       "channel": {
         "title": "Input Channel",
         "description": "Select which input channel to record from. Use this if your audio interface has multiple inputs.",

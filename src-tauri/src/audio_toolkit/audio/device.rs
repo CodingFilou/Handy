@@ -50,3 +50,20 @@ pub fn list_output_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::error::
 
     Ok(out)
 }
+
+/// Loopback capture candidates: the devices whose *output* can be recorded
+/// as system audio. On Windows these back WASAPI loopback streams (see
+/// `audio::loopback`); on other platforms the list still lets users pick a
+/// non-default output to capture once platform support lands.
+pub fn list_system_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::error::Error>> {
+    list_output_devices()
+}
+
+/// Whether this platform can capture system output without extra setup.
+/// Windows uses native WASAPI loopback. Linux exposes PulseAudio/PipeWire
+/// "Monitor of …" sources as *input* devices on many setups — those are
+/// picked via the microphone selector instead. macOS needs a virtual audio
+/// driver (e.g. BlackHole) or ScreenCaptureKit (not yet implemented).
+pub fn system_capture_supported() -> bool {
+    cfg!(target_os = "windows")
+}

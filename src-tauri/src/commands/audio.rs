@@ -1,7 +1,11 @@
 use crate::audio_feedback;
-use crate::audio_toolkit::audio::{list_input_devices, list_output_devices, AudioRecorder};
+#[cfg(not(target_os = "windows"))]
+use crate::audio_toolkit::audio::list_system_devices;
+use crate::audio_toolkit::audio::{
+    list_input_devices, list_output_devices, system_capture_supported, AudioRecorder,
+};
 use crate::managers::audio::{AudioRecordingManager, MicrophoneMode};
-use crate::settings::{get_settings, write_settings};
+use crate::settings::{get_settings, write_settings, AudioSource};
 use log::warn;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -377,4 +381,123 @@ pub async fn set_selected_channel(app: AppHandle, channel: Option<u16>) -> Resul
     settings.selected_channel = channel;
     write_settings(&app, settings);
     Ok(())
+}
+
+/// Which input recordings capture: microphone, system output, or both.
+/// Persisted as `audio_source`; pre-feature stores default to `Microphone`.
+#[tauri::command]
+#[specta::specta]
+pub fn get_audio_source(app: AppHandle) -> Result<AudioSource, String> {
+    Ok(get_settings(&app).audio_source)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_audio_source(app: AppHandle, source: AudioSource) -> Result<(), String> {
+    // Apply the runtime change before persisting it so a rejected change
+    // (e.g. while recording) does not become effective on the next launch.
+    // Restarting capture can block, so keep it off the webview/main run loop.
+    let manager = app.state::<Arc<AudioRecordingManager>>().inner().clone();
+    tokio::task::spawn_blocking(move || manager.update_audio_source(source))
+        .await
+        .map_err(|e| format!("audio task join failed: {e}"))?
+        .map_err(|e| format!("Failed to update audio source: {e}"))?;
+
+    let mut settings = get_settings(&app);
+    settings.audio_source = source;
+    write_settings(&app, settings);
+    Ok(())
+}
+
+/// Whether this OS can capture system output without extra setup (Windows:
+/// native WASAPI loopback). The UI uses this to explain alternatives
+/// elsewhere (Linux "Monitor of …" input, macOS virtual device).
+#[tauri::command]
+#[specta::specta]
+pub fn is_system_capture_supported() -> bool {
+    system_capture_supported()
+}
+
+/// Output devices that can be captured as system audio (`None` entry =
+/// system default output). Names match the loopback device names, so the
+/// selected entry resolves directly in the capture backend.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_available_system_devices() -> Result<Vec<AudioDevice>, String> {
+    // Device enumeration can stall — run it off the webview/main run loop.
+    tokio::task::spawn_blocking(|| {
+        // On Windows the picker lists the WASAPI endpoints directly, so
+        // every entry is guaranteed to resolve in the loopback backend.
+        // Elsewhere the output-device list doubles as capture candidates.
+        #[cfg(target_os = "windows")]
+        {
+            let devices = crate::audio_toolkit::audio::loopback::wasapi::list_loopback_devices()
+                .map_err(|e| format!("Failed to list system devices: {}", e))?;
+
+            let mut result = vec![AudioDevice {
+                index: "default".to_string(),
+                name: "Default".to_string(),
+                is_default: true,
+            }];
+
+            result.extend(devices.into_iter().enumerate().map(|(i, d)| AudioDevice {
+                index: i.to_string(),
+                name: d.name,
+                is_default: false, // The explicit default is handled separately
+            }));
+
+            Ok::<_, String>(result)
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let devices = list_system_devices()
+                .map_err(|e| format!("Failed to list system devices: {}", e))?;
+
+            let mut result = vec![AudioDevice {
+                index: "default".to_string(),
+                name: "Default".to_string(),
+                is_default: true,
+            }];
+
+            result.extend(devices.into_iter().map(|d| AudioDevice {
+                index: d.index,
+                name: d.name,
+                is_default: false, // The explicit default is handled separately
+            }));
+
+            Ok::<_, String>(result)
+        }
+    })
+    .await
+    .map_err(|e| format!("audio task join failed: {e}"))?
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_selected_system_device(app: AppHandle, device_name: String) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.selected_system_device = if device_name == "default" {
+        None
+    } else {
+        Some(device_name)
+    };
+    write_settings(&app, settings);
+
+    // Re-resolve the loopback device. Restarting capture can block — keep it
+    // off the webview/main run loop.
+    let rm = app.state::<Arc<AudioRecordingManager>>().inner().clone();
+    tokio::task::spawn_blocking(move || rm.update_selected_system_device())
+        .await
+        .map_err(|e| format!("audio task join failed: {e}"))?
+        .map_err(|e| format!("Failed to update system device: {e}"))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_selected_system_device(app: AppHandle) -> Result<String, String> {
+    let settings = get_settings(&app);
+    Ok(settings
+        .selected_system_device
+        .unwrap_or_else(|| "default".to_string()))
 }

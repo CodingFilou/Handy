@@ -20,7 +20,7 @@ use crate::audio_toolkit::{
     VoiceActivityDetector,
 };
 
-enum Cmd {
+pub(crate) enum Cmd {
     /// Begin capturing. Carries the send timestamp so the consumer can log how
     /// long the command sat in the channel, plus a one-shot first-sample acknowledgement.
     Start(VadPolicy, Instant, mpsc::Sender<()>),
@@ -30,20 +30,20 @@ enum Cmd {
 
 // Two seconds of ring capacity absorbs consumer stalls without adding latency
 // during normal 10 ms drains.
-const AUDIO_RING_SECONDS: usize = 2;
-const CONSUMER_POLL_INTERVAL: Duration = Duration::from_millis(10);
-const MAX_DRAIN_CHUNK: Duration = Duration::from_millis(50);
-const PAUSE_ACK_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const AUDIO_RING_SECONDS: usize = 2;
+pub(crate) const CONSUMER_POLL_INTERVAL: Duration = Duration::from_millis(10);
+pub(crate) const MAX_DRAIN_CHUNK: Duration = Duration::from_millis(50);
+pub(crate) const PAUSE_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Atomics shared by the callback and consumer; audio uses a wait-free SPSC ring.
 /// The callback must remain allocation-, lock-, logging-, and blocking-free.
 #[derive(Default)]
-struct CaptureTransportState {
-    pause_requested: AtomicBool,
+pub(crate) struct CaptureTransportState {
+    pub(crate) pause_requested: AtomicBool,
     /// Set after forwarding a pause's boundary block; subsequent callbacks
     /// remain silent until the consumer clears the request.
-    pause_acknowledged: AtomicBool,
-    overrun_samples: AtomicU64,
+    pub(crate) pause_acknowledged: AtomicBool,
+    pub(crate) overrun_samples: AtomicU64,
 }
 
 /// How 16 kHz mono frames should be filtered for one recording session.
@@ -62,20 +62,38 @@ pub enum VadPolicy {
 /// concurrently, so one detector is reconfigured per session (see `Cmd::Start`)
 /// rather than kept as two resident engines.
 #[derive(Clone)]
-struct VadConfig {
-    detector: Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>,
-    frame_samples: usize,
-    offline_hangover_frames: usize,
-    streaming_hangover_frames: usize,
+pub(crate) struct VadConfig {
+    pub(crate) detector: Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>,
+    pub(crate) frame_samples: usize,
+    pub(crate) offline_hangover_frames: usize,
+    pub(crate) streaming_hangover_frames: usize,
 }
 
 impl VadConfig {
     /// Post-speech hangover tail (in backend-sized frames) for the given policy.
     /// `Disabled` never reaches the detector, so it maps to the offline value.
-    fn hangover_for(&self, policy: VadPolicy) -> usize {
+    pub(crate) fn hangover_for(&self, policy: VadPolicy) -> usize {
         match policy {
             VadPolicy::Streaming => self.streaming_hangover_frames,
             VadPolicy::Offline | VadPolicy::Disabled => self.offline_hangover_frames,
+        }
+    }
+
+    /// Build from a detector instance. Shared by the microphone recorder and
+    /// the system-audio (loopback) recorder so both VAD pipelines stay tuned
+    /// identically.
+    pub(crate) fn with_detector(
+        detector: Box<dyn vad::VoiceActivityDetector>,
+        offline_hangover_frames: usize,
+        streaming_hangover_frames: usize,
+    ) -> Self {
+        let frame_samples = detector.frame_samples();
+        assert!(frame_samples > 0, "VAD frame size must be non-zero");
+        Self {
+            detector: Arc::new(Mutex::new(detector)),
+            frame_samples,
+            offline_hangover_frames,
+            streaming_hangover_frames,
         }
     }
 }
@@ -129,14 +147,11 @@ impl AudioRecorder {
         offline_hangover_frames: usize,
         streaming_hangover_frames: usize,
     ) -> Self {
-        let frame_samples = detector.frame_samples();
-        assert!(frame_samples > 0, "VAD frame size must be non-zero");
-        self.vad = Some(VadConfig {
-            detector: Arc::new(Mutex::new(detector)),
-            frame_samples,
+        self.vad = Some(VadConfig::with_detector(
+            detector,
             offline_hangover_frames,
             streaming_hangover_frames,
-        });
+        ));
         self
     }
 
@@ -608,7 +623,7 @@ impl AudioRecorder {
     }
 }
 
-fn acknowledge_pause_after_write(transport: &CaptureTransportState) {
+pub(crate) fn acknowledge_pause_after_write(transport: &CaptureTransportState) {
     if transport.pause_requested.load(Ordering::Acquire) {
         transport.pause_acknowledged.store(true, Ordering::Release);
     }
@@ -689,7 +704,7 @@ fn drain_available_samples(
 
 /// What to do with a chunk drained from the ring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ChunkDisposition {
+pub(crate) enum ChunkDisposition {
     /// Process as active recording audio, including during the final stop drain.
     Capture,
     /// Consume idle audio without processing it.
@@ -698,7 +713,9 @@ enum ChunkDisposition {
 
 /// Converts raw ring samples into 16 kHz frames across recording sessions.
 /// Ring transport stays outside to avoid conflicting borrows during drains.
-struct CaptureProcessor {
+/// Shared with the system-audio (loopback) recorder, which feeds the same
+/// pipeline from a WASAPI thread instead of a cpal callback.
+pub(crate) struct CaptureProcessor {
     // ---- stream-scoped: fixed for the life of the input stream ---------- //
     in_sample_rate: u32,
     vad: Option<VadConfig>,
@@ -720,7 +737,7 @@ struct CaptureProcessor {
 }
 
 impl CaptureProcessor {
-    fn new(
+    pub(crate) fn new(
         in_sample_rate: u32,
         vad: Option<VadConfig>,
         level_cb: Option<LevelCallback>,
@@ -772,7 +789,7 @@ impl CaptureProcessor {
     }
 
     /// Reset per-recording state and arm the first-sample acknowledgement.
-    fn begin_recording(&mut self, policy: VadPolicy, ready_tx: mpsc::Sender<()>) {
+    pub(crate) fn begin_recording(&mut self, policy: VadPolicy, ready_tx: mpsc::Sender<()>) {
         self.awaiting_first_captured_chunk = Some(Instant::now());
         self.capture_ready_tx = Some(ready_tx);
         self.total_dropped_samples = 0;
@@ -792,14 +809,18 @@ impl CaptureProcessor {
 
     /// Drop a pending first-sample acknowledgement. If Stop was queued before
     /// the first chunk, this prevents a stale ready UI event or start chime.
-    fn cancel_ready_signal(&mut self) {
+    pub(crate) fn cancel_ready_signal(&mut self) {
         self.capture_ready_tx = None;
         self.awaiting_first_captured_chunk = None;
     }
 
     /// Drain up to one bounded chunk from the ring. Returns the number of
     /// samples consumed so callers can tell an empty ring from a busy one.
-    fn drain(&mut self, consumer: &mut Consumer<f32>, disposition: ChunkDisposition) -> usize {
+    pub(crate) fn drain(
+        &mut self,
+        consumer: &mut Consumer<f32>,
+        disposition: ChunkDisposition,
+    ) -> usize {
         let max_samples = self.max_drain_samples;
         drain_available_samples(consumer, max_samples, |raw| {
             self.process_raw_chunk(raw, disposition)
@@ -854,7 +875,7 @@ impl CaptureProcessor {
 
     /// Account for samples the callback could not fit into the ring during
     /// the active recording. Warns once per recording.
-    fn observe_overrun(&mut self, samples: u64) {
+    pub(crate) fn observe_overrun(&mut self, samples: u64) {
         if samples == 0 {
             return;
         }
@@ -869,7 +890,7 @@ impl CaptureProcessor {
     }
 
     /// Flush the resampler tail and hand back the finished recording.
-    fn finish_recording(&mut self) -> Vec<f32> {
+    pub(crate) fn finish_recording(&mut self) -> Vec<f32> {
         let vad_policy = self.vad_policy;
         self.frame_resampler.finish(|frame: &[f32]| {
             handle_frame(
@@ -911,7 +932,7 @@ impl CaptureProcessor {
     }
 }
 
-fn run_consumer(
+pub(crate) fn run_consumer(
     mut processor: CaptureProcessor,
     mut sample_consumer: Consumer<f32>,
     cmd_rx: mpsc::Receiver<Cmd>,

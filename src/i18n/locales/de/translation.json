@@ -237,6 +237,20 @@
         "placeholder": "Mikrofon auswählen...",
         "loading": "Wird geladen..."
       },
+      "audioSource": {
+        "title": "Audioquelle",
+        "description": "Wählen, was transkribiert wird: Mikrofon, Computer-Sound (Meetings, Anrufe, Medien) oder beides gemischt. System-Audio funktioniert unter Windows (WASAPI-Loopback); unter Linux den „Monitor von …“-Eingang als Mikrofon wählen, unter macOS ein virtuelles Audiogerät nutzen.",
+        "placeholder": "Audioquelle auswählen...",
+        "microphone": "Mikrofon",
+        "system": "System-Audio (Computer-Sound)",
+        "both": "Mikrofon + System-Audio"
+      },
+      "systemDevice": {
+        "title": "System-Audio-Gerät",
+        "description": "Welches Ausgabegerät aufgenommen wird, wenn System-Audio zur Audioquelle gehört",
+        "placeholder": "System-Gerät auswählen...",
+        "loading": "Wird geladen..."
+      },
       "channel": {
         "title": "Eingangskanal",
         "description": "Wähle den Eingangskanal aus, von dem aufgenommen werden soll. Verwende diese Option, wenn dein Audio-Interface mehrere Eingänge hat.",

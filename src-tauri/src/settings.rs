@@ -217,6 +217,25 @@ pub enum KeyboardImplementation {
     HandyKeys,
 }
 
+/// Which audio input a recording captures.
+///
+/// `Microphone` is the historic behavior. `System` captures the computer's
+/// own output (meetings, calls, media playback) via OS loopback capture —
+/// currently Windows (WASAPI loopback). `Both` records microphone and system
+/// output together and mixes them into a single transcription, which is what
+/// meeting transcription needs (your voice plus everyone else's).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioSource {
+    /// Capture from the microphone (default, historic behavior).
+    #[default]
+    Microphone,
+    /// Capture the computer's own output (system audio loopback).
+    System,
+    /// Mix microphone and system output into one transcription.
+    Both,
+}
+
 impl Default for KeyboardImplementation {
     fn default() -> Self {
         #[cfg(target_os = "linux")]
@@ -427,6 +446,15 @@ pub struct AppSettings {
     pub clamshell_microphone: Option<String>,
     #[serde(default)]
     pub selected_output_device: Option<String>,
+    /// Which audio input recordings capture: microphone (default),
+    /// system output (computer sound, e.g. meetings), or both mixed.
+    /// `Default` keeps pre-feature stores on the historic microphone behavior.
+    #[serde(default)]
+    pub audio_source: AudioSource,
+    /// Loopback capture device for `AudioSource::System`/`Both`, matched
+    /// against the output-device list. `None` = system default output.
+    #[serde(default)]
+    pub selected_system_device: Option<String>,
     #[serde(default = "default_translate_to_english")]
     pub translate_to_english: bool,
     #[serde(default = "default_selected_language")]
@@ -949,6 +977,8 @@ pub fn get_default_settings() -> AppSettings {
         selected_channel: None,
         clamshell_microphone: None,
         selected_output_device: None,
+        audio_source: AudioSource::Microphone,
+        selected_system_device: None,
         translate_to_english: false,
         selected_language: "auto".to_string(),
         overlay_position: default_overlay_position(),

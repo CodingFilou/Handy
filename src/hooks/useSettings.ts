@@ -9,6 +9,7 @@ interface UseSettingsReturn {
   isUpdating: (key: string) => boolean;
   audioDevices: AudioDevice[];
   outputDevices: AudioDevice[];
+  systemDevices: AudioDevice[];
   audioFeedbackEnabled: boolean;
   postProcessModelOptions: Record<string, string[]>;
   updateChecksLocked: boolean | null;
@@ -22,6 +23,7 @@ interface UseSettingsReturn {
   refreshSettings: () => Promise<void>;
   refreshAudioDevices: () => Promise<void>;
   refreshOutputDevices: () => Promise<void>;
+  refreshSystemDevices: () => Promise<void>;
 
   // Binding-specific actions
   updateBinding: (id: string, binding: string) => Promise<void>;
@@ -60,6 +62,7 @@ export const useSettings = (): UseSettingsReturn => {
     isUpdating: store.isUpdatingKey,
     audioDevices: store.audioDevices,
     outputDevices: store.outputDevices,
+    systemDevices: store.systemDevices,
     audioFeedbackEnabled: store.settings?.audio_feedback || false,
     postProcessModelOptions: store.postProcessModelOptions,
     updateChecksLocked: store.updateChecksLocked,
@@ -68,6 +71,7 @@ export const useSettings = (): UseSettingsReturn => {
     refreshSettings: store.refreshSettings,
     refreshAudioDevices: store.refreshAudioDevices,
     refreshOutputDevices: store.refreshOutputDevices,
+    refreshSystemDevices: store.refreshSystemDevices,
     updateBinding: store.updateBinding,
     resetBinding: store.resetBinding,
     getSetting: store.getSetting,

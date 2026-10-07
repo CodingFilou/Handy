@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   AppSettings as Settings,
   AudioDevice,
+  AudioSource,
   ChineseScript,
   TranscribeAcceleratorSetting,
   OrtAcceleratorSetting,
@@ -20,6 +21,7 @@ interface SettingsStore {
   isUpdating: Record<string, boolean>;
   audioDevices: AudioDevice[];
   outputDevices: AudioDevice[];
+  systemDevices: AudioDevice[];
   customSounds: { start: boolean; stop: boolean };
   postProcessModelOptions: Record<string, string[]>;
   // null until loadUpdateChecksLocked() resolves
@@ -37,6 +39,7 @@ interface SettingsStore {
   refreshSettings: () => Promise<void>;
   refreshAudioDevices: () => Promise<void>;
   refreshOutputDevices: () => Promise<void>;
+  refreshSystemDevices: () => Promise<void>;
   updateBinding: (id: string, binding: string) => Promise<void>;
   resetBinding: (id: string) => Promise<void>;
   getSetting: <K extends keyof Settings>(key: K) => Settings[K] | undefined;
@@ -68,6 +71,7 @@ interface SettingsStore {
   setUpdating: (key: string, updating: boolean) => void;
   setAudioDevices: (devices: AudioDevice[]) => void;
   setOutputDevices: (devices: AudioDevice[]) => void;
+  setSystemDevices: (devices: AudioDevice[]) => void;
   setCustomSounds: (sounds: { start: boolean; stop: boolean }) => void;
 }
 
@@ -117,6 +121,21 @@ const settingUpdaters: {
       throw new Error(result.error);
     }
   },
+  audio_source: async (value) => {
+    const result = await commands.setAudioSource(value as AudioSource);
+    if (result.status === "error") {
+      // Rejected switches (e.g. mid-recording) roll the dropdown back via the
+      // throw below; the toast tells the user why.
+      toast.error(result.error);
+      throw new Error(result.error);
+    }
+  },
+  selected_system_device: (value) =>
+    commands.setSelectedSystemDevice(
+      (value as string) === "Default" || value === null
+        ? "default"
+        : (value as string),
+    ),
   clamshell_microphone: (value) =>
     commands.setClamshellMicrophone(
       (value as string) === "Default" ? "default" : (value as string),
@@ -207,6 +226,7 @@ export const useSettingsStore = create<SettingsStore>()(
     isUpdating: {},
     audioDevices: [],
     outputDevices: [],
+    systemDevices: [],
     customSounds: { start: false, stop: false },
     postProcessModelOptions: {},
     updateChecksLocked: null,
@@ -221,6 +241,7 @@ export const useSettingsStore = create<SettingsStore>()(
       })),
     setAudioDevices: (audioDevices) => set({ audioDevices }),
     setOutputDevices: (outputDevices) => set({ outputDevices }),
+    setSystemDevices: (systemDevices) => set({ systemDevices }),
     setCustomSounds: (customSounds) => set({ customSounds }),
 
     // Getters
@@ -240,6 +261,9 @@ export const useSettingsStore = create<SettingsStore>()(
             clamshell_microphone: settings.clamshell_microphone ?? "Default",
             selected_output_device:
               settings.selected_output_device ?? "Default",
+            audio_source: settings.audio_source ?? "microphone",
+            selected_system_device:
+              settings.selected_system_device ?? "Default",
           };
           set({ settings: normalizedSettings, isLoading: false });
         } else {
@@ -291,6 +315,27 @@ export const useSettingsStore = create<SettingsStore>()(
       } catch (error) {
         console.error("Failed to load output devices:", error);
         set({ outputDevices: [DEFAULT_AUDIO_DEVICE] });
+      }
+    },
+
+    // Load system-audio (loopback) capture devices
+    refreshSystemDevices: async () => {
+      try {
+        const result = await commands.getAvailableSystemDevices();
+        if (result.status === "ok") {
+          const devicesWithDefault = [
+            DEFAULT_AUDIO_DEVICE,
+            ...result.data.filter(
+              (d) => d.name !== "Default" && d.name !== "default",
+            ),
+          ];
+          set({ systemDevices: devicesWithDefault });
+        } else {
+          set({ systemDevices: [DEFAULT_AUDIO_DEVICE] });
+        }
+      } catch (error) {
+        console.error("Failed to load system devices:", error);
+        set({ systemDevices: [DEFAULT_AUDIO_DEVICE] });
       }
     },
 
