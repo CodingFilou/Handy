@@ -1,0 +1,21 @@
+# Fork-only: build the Windows installer (.exe) for the system-audio fork.
+# Upstream release.yml signs binaries and ships all platforms; this fork has
+# no signing key, so it builds unsigned Windows artifacts on demand.
+# Run via: gh workflow run fork-windows-build.yml --ref feature/system-audio
+name: fork-windows-build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    uses: ./.github/workflows/build.yml
+    with:
+      platform: "windows-latest"
+      target: "x86_64-pc-windows-msvc"
+      build-args: ""
+      sign-binaries: false
+      asset-prefix: "handy-sysaudio"
+      upload-artifacts: true
+      no-cache: true
+    secrets: inherit
