@@ -980,28 +980,26 @@ impl AudioRecordingManager {
 
         let selected = settings.selected_system_device.clone();
         let mut sys_opt = self.sys_recorder.lock().unwrap();
-        if let Some(rec) = sys_opt.as_mut() {
-            if let Err(first_err) = rec.open(selected.clone()) {
-                if selected.is_some() {
-                    warn!(
-                        "System-audio open failed ({first_err}); falling back to the default output"
-                    );
-                    rec.open(None).map_err(|e| {
-                        anyhow::anyhow!("Failed to open system-audio recorder: {}", e)
-                    })?;
-                    drop(sys_opt);
-                    if let Some(name) = selected {
-                        self.persist_default_system_device_after_fallback(&name);
-                    }
-                    *open_flag = true;
-                    info!("System-audio stream initialized (default output)");
-                    return Ok(());
+        let Some(rec) = sys_opt.as_mut() else {
+            return Err(anyhow::anyhow!("System-audio recorder not available"));
+        };
+        if let Err(first_err) = rec.open(selected.clone()) {
+            if selected.is_some() {
+                warn!("System-audio open failed ({first_err}); falling back to the default output");
+                rec.open(None)
+                    .map_err(|e| anyhow::anyhow!("Failed to open system-audio recorder: {}", e))?;
+                drop(sys_opt);
+                if let Some(name) = selected {
+                    self.persist_default_system_device_after_fallback(&name);
                 }
-                return Err(anyhow::anyhow!(
-                    "Failed to open system-audio recorder: {}",
-                    first_err
-                ));
+                *open_flag = true;
+                info!("System-audio stream initialized (default output)");
+                return Ok(());
             }
+            return Err(anyhow::anyhow!(
+                "Failed to open system-audio recorder: {}",
+                first_err
+            ));
         }
         drop(sys_opt);
 
@@ -1243,7 +1241,8 @@ impl AudioRecordingManager {
         }
 
         let previous_recorder = self.recorder.lock().unwrap().replace(replacement);
-        let previous_sys = self.sys_recorder.lock().unwrap().replace(sys_replacement);
+        let previous_sys =
+            std::mem::replace(&mut *self.sys_recorder.lock().unwrap(), sys_replacement);
         if was_open || sys_was_open {
             if let Err(change_error) = self.start_capture_streams() {
                 // Ensure a partially opened replacement cannot retain capture
