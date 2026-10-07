@@ -1158,7 +1158,7 @@ impl TranscriptionManager {
         if audio.is_empty() {
             debug!("Empty audio vector");
             self.maybe_unload_immediately("empty audio");
-            return Ok(String::new());
+            return Ok(DetailedTranscript::default());
         }
 
         // Check if model is loaded, if not try to load it
