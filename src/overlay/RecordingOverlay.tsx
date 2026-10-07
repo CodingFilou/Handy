@@ -45,6 +45,10 @@ const RecordingOverlay: React.FC = () => {
   // it open after the load so it doesn't collapse and reopen when text arrives.
   const [loadNoticeShown, setLoadNoticeShown] = useState(false);
   const [levels, setLevels] = useState<number[]>(Array(WAVE_BARS).fill(0));
+  // True while the active session records via the meeting shortcut. Set by the
+  // backend's `overlay-mode` event (sent on every start); cleared only on hide
+  // so a later `show-overlay` (transcribing, …) can never wipe it mid-session.
+  const [meeting, setMeeting] = useState(false);
   const [streamText, setStreamText] = useState<StreamTextEvent>({
     committed: "",
     tentative: "",
@@ -111,6 +115,11 @@ const RecordingOverlay: React.FC = () => {
       const unlistenHide = await listen("hide-overlay", () => {
         setIsVisible(false);
         setCaptureReady(false);
+        setMeeting(false);
+      });
+
+      const unlistenMode = await listen<boolean>("overlay-mode", (event) => {
+        setMeeting(event.payload === true);
       });
 
       const unlistenReady = await listen("recording-ready", () => {
@@ -120,14 +129,18 @@ const RecordingOverlay: React.FC = () => {
 
       const unlistenLevel = await listen<number[]>("mic-level", (event) => {
         const newLevels = event.payload as number[];
-        // Exponential smoothing across the 16 buckets, then take the first N
-        // bars for the shared waveform.
-        const smoothed = smoothedLevelsRef.current.map((prev, i) => {
+        // Peak-hold across the 16 buckets: instant attack so quiet onsets
+        // (system audio in meetings, soft speech) deflect immediately, gentle
+        // release so the waveform falls instead of flickering. The old
+        // exponential blend dragged every peak toward the interleaved quiet
+        // frames — in Both mode the mic and system recorders emit alternating
+        // level events, which halved the visible swing.
+        const held = smoothedLevelsRef.current.map((prev, i) => {
           const target = newLevels[i] || 0;
-          return prev * 0.7 + target * 0.3;
+          return target > prev ? target : prev * 0.9;
         });
-        smoothedLevelsRef.current = smoothed;
-        setLevels(smoothed.slice(0, WAVE_BARS));
+        smoothedLevelsRef.current = held;
+        setLevels(held.slice(0, WAVE_BARS));
       });
 
       const unlistenStream = await events.streamTextEvent.listen((event) => {
@@ -170,6 +183,7 @@ const RecordingOverlay: React.FC = () => {
       return () => {
         unlistenShow();
         unlistenHide();
+        unlistenMode();
         unlistenReady();
         unlistenLevel();
         unlistenStream();
@@ -228,13 +242,15 @@ const RecordingOverlay: React.FC = () => {
     : t("overlay.transcribing");
 
   // ---- Shared building blocks (one visual language for every overlay form) ----
+  // Hotter than the backend's 0..1 buckets read on their own: speech typically
+  // lands at 0.1–0.5, which the old curve rendered as a 6–12 px wobble.
   const waveform = (
     <div className={`swave ${captureReady ? "ready" : "arming"}`}>
       {levels.map((v, i) => (
         <i
           key={i}
           style={{
-            height: `${Math.max(3, Math.min(18, 3 + Math.pow(v, 0.7) * 15))}px`,
+            height: `${Math.max(3, Math.min(18, 3 + Math.pow(v, 0.55) * 15))}px`,
           }}
         />
       ))}
@@ -305,8 +321,8 @@ const RecordingOverlay: React.FC = () => {
         <div
           key={session}
           className={`scard ${open ? "open" : ""} ${collapsed ? "working" : ""} ${
-            isVisible ? "" : "leaving"
-          }`}
+            meeting ? "meeting" : ""
+          } ${isVisible ? "" : "leaving"}`}
         >
           <div className="stext">
             <div className="stext-clip">
@@ -355,10 +371,14 @@ const RecordingOverlay: React.FC = () => {
   return (
     <div
       dir={direction}
-      className={`ov-stage ${position} ov-fade ${isVisible ? "show" : ""}`}
+      className={`ov-stage ${position} ov-fade ${isVisible ? "show" : ""} ${
+        meeting ? "meeting" : ""
+      }`}
     >
       <div
-        className={`scard compact ${working && isVisible ? "cworking" : ""}`}
+        className={`scard compact ${working && isVisible ? "cworking" : ""} ${
+          meeting ? "meeting" : ""
+        }`}
       >
         {working ? workingRow(workLabel, true) : listeningRow(false, true)}
       </div>

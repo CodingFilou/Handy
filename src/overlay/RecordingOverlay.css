@@ -45,6 +45,24 @@
   --s-border: var(--light-s-border);
   --s-hair: var(--light-s-hair);
 
+  /* Meeting tint: blue instead of the logo pink, for sessions recorded via
+     the meeting shortcut. Same light/dark/data-theme switching as the
+     neutrals above; applied by `.meeting` on the stage or card. */
+  --light-s-meeting: #2563eb;
+  --dark-s-meeting: #60a5fa;
+  --light-s-meeting-soft: color-mix(
+    in srgb,
+    var(--light-s-meeting) 22%,
+    transparent
+  );
+  --dark-s-meeting-soft: color-mix(
+    in srgb,
+    var(--dark-s-meeting) 24%,
+    transparent
+  );
+  --s-meeting: var(--light-s-meeting);
+  --s-meeting-soft: var(--light-s-meeting-soft);
+
   /* Card geometry — single source of truth for the visible overlay sizes. The
      native overlay window (overlay.rs) is sized from these: it must be at least
      the card's max footprint (--ov-work-w for compact, --ov-open-w for Live),
@@ -66,6 +84,8 @@
     --s-faint: var(--dark-s-faint);
     --s-border: var(--dark-s-border);
     --s-hair: var(--dark-s-hair);
+    --s-meeting: var(--dark-s-meeting);
+    --s-meeting-soft: var(--dark-s-meeting-soft);
   }
 }
 
@@ -84,6 +104,8 @@
   --s-faint: var(--light-s-faint);
   --s-border: var(--light-s-border);
   --s-hair: var(--light-s-hair);
+  --s-meeting: var(--light-s-meeting);
+  --s-meeting-soft: var(--light-s-meeting-soft);
 }
 
 :root[data-theme="dark"] {
@@ -92,6 +114,16 @@
   --s-faint: var(--dark-s-faint);
   --s-border: var(--dark-s-border);
   --s-hair: var(--dark-s-hair);
+  --s-meeting: var(--dark-s-meeting);
+  --s-meeting-soft: var(--dark-s-meeting-soft);
+}
+
+/* Meeting sessions (class set from the backend `overlay-mode` event):
+   retint the accent — dot, waveform bars, spinner, caret — to blue. */
+.ov-stage.meeting,
+.scard.meeting {
+  --s-accent: var(--s-meeting);
+  --s-accent-soft: var(--s-meeting-soft);
 }
 
 /* ============================================================

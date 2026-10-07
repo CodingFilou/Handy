@@ -17,7 +17,7 @@ use crate::utils::{
     self, show_processing_overlay, show_recording_overlay, show_transcribing_overlay,
 };
 use crate::TranscriptionCoordinator;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::future::Future;
@@ -554,6 +554,16 @@ impl ShortcutAction for TranscribeAction {
             OverlayStyle::Live | OverlayStyle::Minimal => show_recording_overlay(app),
             OverlayStyle::None => {} // show_overlay_state no-ops on None anyway
         }
+        // Tell the overlay whether this session is a meeting so it can tint
+        // itself (blue) for the whole session. Sent on every start — with the
+        // matching `false` for normal recordings — because the overlay only
+        // resets its tint on hide, never on show (avoids an ordering race
+        // with the show event above).
+        let _ = app.emit_to(
+            "recording_overlay",
+            "overlay-mode",
+            binding_id == "transcribe_meeting",
+        );
         // Everything above runs before capture can begin, so each span here is
         // added keypress->capture latency.
         debug!(
@@ -718,6 +728,24 @@ impl ShortcutAction for TranscribeAction {
                     .map(|samples| (samples, None))
             };
             if let Some((samples, channels)) = stopped {
+                // Breadcrumb at info level (visible with the default log
+                // level): pinpoints whether a stuck "Transkribiere..." sits
+                // in capture-stop or in transcription.
+                info!(
+                    "Recording stop returned {} samples (meeting={}, mic={}, sys={})",
+                    samples.len(),
+                    is_meeting,
+                    channels
+                        .as_ref()
+                        .and_then(|ch| ch.mic.as_ref())
+                        .map(|mic| mic.len())
+                        .unwrap_or(0),
+                    channels
+                        .as_ref()
+                        .and_then(|ch| ch.sys.as_ref())
+                        .map(|sys| sys.len())
+                        .unwrap_or(0),
+                );
                 debug!(
                     "Recording stopped and samples retrieved in {:?}, sample count: {}",
                     stop_recording_time.elapsed(),
@@ -757,8 +785,30 @@ impl ShortcutAction for TranscribeAction {
                     // stream and fall back to batch transcription.
                     let transcription_time = Instant::now();
                     let transcription_result = if is_meeting {
-                        tm.transcribe_detailed(samples)
-                            .map(|detailed| (detailed.text.clone(), Some(detailed)))
+                        info!(
+                            "Meeting batch transcription starting ({} samples, segment timestamps on)",
+                            samples.len()
+                        );
+                        match tm.transcribe_detailed(samples.clone()) {
+                            Ok(detailed) => Ok((detailed.text.clone(), Some(detailed))),
+                            Err(detailed_err) => {
+                                // Segment-timestamp runs are new: if the engine
+                                // rejects them, fall back to the proven plain
+                                // run and label the whole utterance by overall
+                                // channel energy instead of stranding the user
+                                // on a failure toast.
+                                error!(
+                                    "Detailed meeting transcription failed ({detailed_err:#}); falling back to plain transcription"
+                                );
+                                tm.transcribe(samples).map(|text| {
+                                    let fallback = DetailedTranscript {
+                                        text: text.clone(),
+                                        segments: Vec::new(),
+                                    };
+                                    (text, Some(fallback))
+                                })
+                            }
+                        }
                     } else {
                         match tm.finalize_stream() {
                             // A finalized stream with usable text wins. An empty result
