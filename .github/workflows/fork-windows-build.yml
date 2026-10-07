@@ -16,7 +16,11 @@ jobs:
       platform: "windows-latest"
       target: "x86_64-pc-windows-msvc"
       build-args: ""
-      sign-binaries: false
+      # NOTE: `true` does NOT sign binaries here (no Azure key, no signCommand
+      # in tauri.conf). It only unlocks the TAURI_SIGNING_* secrets so the
+      # updater artifacts (.sig) can be created; `false` would pass empty
+      # strings and fail bundling with "Missing comment in secret key".
+      sign-binaries: true
       asset-prefix: "handy-sysaudio"
       upload-artifacts: true
       no-cache: true
