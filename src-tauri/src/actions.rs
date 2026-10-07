@@ -7,7 +7,9 @@ use crate::managers::history::HistoryManager;
 use crate::managers::model::ModelManager;
 use crate::managers::transcription::StreamWorkKind;
 use crate::managers::transcription::TranscriptionManager;
-use crate::settings::{get_settings, AppSettings, OverlayStyle, APPLE_INTELLIGENCE_PROVIDER_ID};
+use crate::settings::{
+    get_settings, AppSettings, AudioSource, OverlayStyle, APPLE_INTELLIGENCE_PROVIDER_ID,
+};
 use crate::shortcut;
 use crate::tray::{set_tray_state, TrayIconState};
 use crate::utils::{
@@ -56,6 +58,10 @@ pub trait ShortcutAction: Send + Sync {
 // Transcribe Action
 struct TranscribeAction {
     post_process: bool,
+    /// Fixed capture source for this shortcut. `None` follows the audio
+    /// source setting; `Some(_)` always records that source — this is how
+    /// the meeting shortcut works without touching the setting.
+    audio_source: Option<AudioSource>,
 }
 
 /// Field name for structured output JSON schema
@@ -397,8 +403,9 @@ impl ShortcutAction for TranscribeAction {
         let kickoff_started = Instant::now();
         tm.initiate_model_load();
         let rm_clone = Arc::clone(&rm);
+        let source_override = self.audio_source;
         std::thread::spawn(move || {
-            if let Err(e) = rm_clone.preload_vad() {
+            if let Err(e) = rm_clone.preload_for_source(source_override) {
                 debug!("VAD pre-load failed: {}", e);
             }
         });
@@ -472,7 +479,7 @@ impl ShortcutAction for TranscribeAction {
 
         let mut recording_error: Option<String> = None;
         let recording_start_time = Instant::now();
-        match rm.try_start_recording(&binding_id, vad_policy) {
+        match rm.try_start_recording(&binding_id, vad_policy, self.audio_source) {
             Ok(readiness) => {
                 debug!(
                     "Recording request accepted in {:?}; waiting for first microphone samples",
@@ -481,6 +488,7 @@ impl ShortcutAction for TranscribeAction {
                 let generation = readiness.generation();
                 let app_clone = app.clone();
                 let rm_clone = Arc::clone(&rm);
+                let source_override = self.audio_source;
                 std::thread::spawn(move || {
                     if !readiness.wait() {
                         debug!("Microphone readiness wait ended without receiving samples");
@@ -518,7 +526,7 @@ impl ShortcutAction for TranscribeAction {
                         play_feedback_sound_blocking(&app_clone, SoundType::Start);
                     }
                     if rm_clone.is_recording_readiness_current(generation) {
-                        rm_clone.apply_mute();
+                        rm_clone.apply_mute_for(source_override);
                     }
                 });
             }
@@ -863,11 +871,22 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
         "transcribe".to_string(),
         Arc::new(TranscribeAction {
             post_process: false,
+            audio_source: None,
         }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
         "transcribe_with_post_process".to_string(),
-        Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
+        Arc::new(TranscribeAction {
+            post_process: true,
+            audio_source: None,
+        }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "transcribe_meeting".to_string(),
+        Arc::new(TranscribeAction {
+            post_process: false,
+            audio_source: Some(AudioSource::Both),
+        }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
         "cancel".to_string(),

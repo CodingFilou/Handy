@@ -700,13 +700,20 @@ impl AudioRecordingManager {
     /// restore it instead of unconditionally unmuting.
     ///
     /// Never mutes while system audio is a capture source: muting the output
-    /// would silence the very signal being recorded.
+    /// would silence the very signal being recorded. Follows a shortcut
+    /// source override when one is given.
     pub fn apply_mute(&self) {
+        self.apply_mute_for(None)
+    }
+
+    /// Mute guard for an explicit source (shortcut override).
+    pub fn apply_mute_for(&self, source_override: Option<AudioSource>) {
         let settings = get_settings(&self.app_handle);
+        let source = source_override.unwrap_or(settings.audio_source);
         if !settings.mute_while_recording {
             return;
         }
-        if Self::wants_system(&settings) {
+        if Self::wants_system_for(source) {
             debug!("Skipping mute while recording: system audio is a capture source");
             return;
         }
@@ -743,10 +750,17 @@ impl AudioRecordingManager {
     }
 
     pub fn preload_vad(&self) -> Result<(), anyhow::Error> {
+        let source = get_settings(&self.app_handle).audio_source;
+        self.preload_vad_for(source)
+    }
+
+    /// Build the microphone recorder for an explicit source (follows the
+    /// setting when it is the default, the shortcut override otherwise).
+    pub fn preload_vad_for(&self, source: AudioSource) -> Result<(), anyhow::Error> {
         let mut recorder_opt = self.recorder.lock().unwrap();
         if recorder_opt.is_none() {
             let settings = get_settings(&self.app_handle);
-            let sink = self.live_sink_for(settings.audio_source);
+            let sink = self.live_sink_for(source);
             *recorder_opt = Some(create_audio_recorder(
                 settings.vad_backend,
                 &self.app_handle,
@@ -761,18 +775,41 @@ impl AudioRecordingManager {
     /// Lazily build the system-audio recorder (mirrors [`preload_vad`](Self::preload_vad)).
     /// No-op unless the audio source includes system output.
     pub fn preload_system_vad(&self) -> Result<(), anyhow::Error> {
-        if !Self::wants_system(&get_settings(&self.app_handle)) {
+        let source = get_settings(&self.app_handle).audio_source;
+        self.preload_system_vad_for(source)
+    }
+
+    /// Build the system-audio recorder for an explicit source.
+    pub fn preload_system_vad_for(&self, source: AudioSource) -> Result<(), anyhow::Error> {
+        if !Self::wants_system_for(source) {
             return Ok(());
         }
         let mut recorder_opt = self.sys_recorder.lock().unwrap();
         if recorder_opt.is_none() {
             let settings = get_settings(&self.app_handle);
-            let sink = self.live_sink_for(settings.audio_source);
+            let sink = self.live_sink_for(source);
             *recorder_opt = Some(create_loopback_recorder(
                 settings.vad_backend,
                 &self.app_handle,
                 &sink,
             )?);
+        }
+        Ok(())
+    }
+
+    /// Preload every recorder the effective source needs (settings default
+    /// unless a shortcut overrides it). Used by the recording kickoff so the
+    /// meeting shortcut warms both VADs without touching the setting.
+    pub fn preload_for_source(
+        &self,
+        source_override: Option<AudioSource>,
+    ) -> Result<(), anyhow::Error> {
+        let source = source_override.unwrap_or(get_settings(&self.app_handle).audio_source);
+        if Self::wants_mic_for(source) {
+            self.preload_vad_for(source)?;
+        }
+        if Self::wants_system_for(source) {
+            self.preload_system_vad_for(source)?;
         }
         Ok(())
     }
@@ -799,20 +836,29 @@ impl AudioRecordingManager {
     }
 
     fn wants_mic(settings: &AppSettings) -> bool {
-        matches!(
-            settings.audio_source,
-            AudioSource::Microphone | AudioSource::Both
-        )
+        Self::wants_mic_for(settings.audio_source)
+    }
+
+    fn wants_mic_for(source: AudioSource) -> bool {
+        matches!(source, AudioSource::Microphone | AudioSource::Both)
     }
 
     fn wants_system(settings: &AppSettings) -> bool {
-        matches!(
-            settings.audio_source,
-            AudioSource::System | AudioSource::Both
-        )
+        Self::wants_system_for(settings.audio_source)
+    }
+
+    fn wants_system_for(source: AudioSource) -> bool {
+        matches!(source, AudioSource::System | AudioSource::Both)
     }
 
     pub fn start_microphone_stream(&self) -> Result<(), anyhow::Error> {
+        let source = get_settings(&self.app_handle).audio_source;
+        self.start_microphone_stream_for(source)
+    }
+
+    /// Open the microphone stream with recorders built for an explicit
+    /// source (shortcut override).
+    pub fn start_microphone_stream_for(&self, source: AudioSource) -> Result<(), anyhow::Error> {
         let mut open_flag = self.is_open.lock().unwrap();
         if *open_flag {
             // `is_open` only records that we opened a stream at some point, not
@@ -881,7 +927,7 @@ impl AudioRecordingManager {
 
         // Ensure VAD is loaded if it wasn't for whatever reason
         let vad_started = Instant::now();
-        self.preload_vad()?;
+        self.preload_vad_for(source)?;
         let vad_elapsed = vad_started.elapsed();
 
         let open_started = Instant::now();
@@ -955,6 +1001,13 @@ impl AudioRecordingManager {
     /// device. Falls back to the default output when the selected device is
     /// gone, mirroring the microphone fallback below.
     pub fn start_system_stream(&self) -> Result<(), anyhow::Error> {
+        let source = get_settings(&self.app_handle).audio_source;
+        self.start_system_stream_for(source)
+    }
+
+    /// Open the system-audio stream with recorders built for an explicit
+    /// source (shortcut override).
+    pub fn start_system_stream_for(&self, source: AudioSource) -> Result<(), anyhow::Error> {
         let mut open_flag = self.sys_open.lock().unwrap();
         if *open_flag {
             let needs_reopen = self
@@ -976,7 +1029,7 @@ impl AudioRecordingManager {
         }
 
         let settings = get_settings(&self.app_handle);
-        self.preload_system_vad()?;
+        self.preload_system_vad_for(source)?;
 
         let selected = settings.selected_system_device.clone();
         let mut sys_opt = self.sys_recorder.lock().unwrap();
@@ -1030,13 +1083,19 @@ impl AudioRecordingManager {
     /// Partial failures roll back: a half-open state would silently record
     /// only one side of a meeting.
     pub fn start_capture_streams(&self) -> Result<(), anyhow::Error> {
-        let settings = get_settings(&self.app_handle);
-        if Self::wants_mic(&settings) {
-            self.start_microphone_stream()?;
+        let source = get_settings(&self.app_handle).audio_source;
+        self.start_capture_streams_for(source)
+    }
+
+    /// Open every capture stream an explicit source needs (shortcut
+    /// override). Partial failures roll back like the settings-based path.
+    pub fn start_capture_streams_for(&self, source: AudioSource) -> Result<(), anyhow::Error> {
+        if Self::wants_mic_for(source) {
+            self.start_microphone_stream_for(source)?;
         }
-        if Self::wants_system(&settings) {
-            if let Err(e) = self.start_system_stream() {
-                if Self::wants_mic(&settings) {
+        if Self::wants_system_for(source) {
+            if let Err(e) = self.start_system_stream_for(source) {
+                if Self::wants_mic_for(source) {
                     self.stop_microphone_stream();
                 }
                 return Err(e);
@@ -1114,6 +1173,7 @@ impl AudioRecordingManager {
         &self,
         binding_id: &str,
         vad_policy: VadPolicy,
+        source_override: Option<AudioSource>,
     ) -> Result<RecordingReadiness, String> {
         let mut state = self.state.lock().unwrap();
 
@@ -1121,20 +1181,34 @@ impl AudioRecordingManager {
             // Cancel any pending lazy close (no-op in always-on mode, where
             // closes are never scheduled).
             self.close_generation.fetch_add(1, Ordering::SeqCst);
+            // Effective source: the shortcut override (meeting shortcut)
+            // wins over the audio source setting.
+            let configured = get_settings(&self.app_handle).audio_source;
+            let effective = source_override.unwrap_or(configured);
+            // Recorders are built for one live sink (direct or mixed). If the
+            // effective source needs a different sink than what is built —
+            // e.g. the meeting override while the setting is microphone-only,
+            // or a stale mixer from an earlier meeting recording — rebuild
+            // before opening streams. Steady-state repeats skip this.
+            let mixer_present = self.live_mixer.lock().unwrap().is_some();
+            if source_override.is_some_and(|o| o != configured)
+                || (effective == AudioSource::Both) != mixer_present
+            {
+                self.rebuild_recorders_for(effective)?;
+            }
             // Opens the stream(s) in on-demand mode. In always-on mode the streams
             // are normally already open and this is a cheap aliveness check —
             // but if a capture worker died (device disconnect), it rebuilds
             // the stream instead of leaving every subsequent start wedged on
             // "Recorder not available".
-            if let Err(e) = self.start_capture_streams() {
+            if let Err(e) = self.start_capture_streams_for(effective) {
                 let msg = format!("{e}");
                 error!("Failed to open capture streams: {msg}");
                 return Err(msg);
             }
 
-            let settings_now = get_settings(&self.app_handle);
-            let use_mic = Self::wants_mic(&settings_now);
-            let use_sys = Self::wants_system(&settings_now);
+            let use_mic = Self::wants_mic_for(effective);
+            let use_sys = Self::wants_system_for(effective);
 
             // Start every active recorder with the same VAD policy. A late
             // failure stops the already-started side so no half of a meeting
@@ -1285,6 +1359,28 @@ impl AudioRecordingManager {
         Ok(())
     }
 
+    /// Drop all recorders so the next start rebuilds them for `source`.
+    /// Used when a shortcut override (or a stale mixer) disagrees with what
+    /// is built. Stream flags are reset too: the workers are gone, so the
+    /// following start reopens instead of trusting a stale "open".
+    fn rebuild_recorders_for(&self, source: AudioSource) -> Result<(), anyhow::Error> {
+        if let Some(recorder) = self.recorder.lock().unwrap().as_mut() {
+            let _ = recorder.close();
+        }
+        if let Some(recorder) = self.sys_recorder.lock().unwrap().as_mut() {
+            let _ = recorder.close();
+        }
+        *self.recorder.lock().unwrap() = None;
+        *self.sys_recorder.lock().unwrap() = None;
+        if source != AudioSource::Both {
+            *self.live_mixer.lock().unwrap() = None;
+        }
+        *self.is_open.lock().unwrap() = false;
+        *self.sys_open.lock().unwrap() = false;
+        self.invalidate_device_cache();
+        self.preload_for_source(Some(source))
+    }
+
     /// Switch the capture source (microphone / system / both). Recorder
     /// callbacks are fixed at construction — `Both` needs the shared live
     /// mixer — so the recorders are dropped and rebuilt on the next start.
@@ -1303,17 +1399,7 @@ impl AudioRecordingManager {
             self.close_generation.fetch_add(1, Ordering::SeqCst);
             self.stop_capture_streams();
         }
-        if let Some(recorder) = self.recorder.lock().unwrap().as_mut() {
-            let _ = recorder.close();
-        }
-        if let Some(recorder) = self.sys_recorder.lock().unwrap().as_mut() {
-            let _ = recorder.close();
-        }
-        *self.recorder.lock().unwrap() = None;
-        *self.sys_recorder.lock().unwrap() = None;
-        if source != AudioSource::Both {
-            *self.live_mixer.lock().unwrap() = None;
-        }
+        self.rebuild_recorders_for(source)?;
         self.invalidate_device_cache();
         drop(state);
 

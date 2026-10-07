@@ -179,6 +179,10 @@
           "transcribe_with_post_process": {
             "name": "Post-Processing Hotkey",
             "description": "Optional: A dedicated hotkey that always applies AI post-processing to your transcription."
+          },
+          "transcribe_meeting": {
+            "name": "Meeting Shortcut",
+            "description": "Records microphone and system audio together (meetings, calls) — no need to change the audio source setting."
           }
         },
         "errors": {

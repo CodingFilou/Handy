@@ -199,6 +199,10 @@
           "transcribe_with_post_process": {
             "name": "Nachbearbeitungs-Tastenkürzel",
             "description": "Optional: Ein dediziertes Tastenkürzel, das immer die KI-Nachbearbeitung auf deine Transkription anwendet."
+          },
+          "transcribe_meeting": {
+            "name": "Meeting-Kürzel",
+            "description": "Nimmt Mikrofon und System-Audio gemeinsam auf (Meetings, Anrufe) – ganz ohne die Audioquelle umzustellen."
           }
         },
         "errors": {
