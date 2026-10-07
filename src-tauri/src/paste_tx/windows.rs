@@ -597,11 +597,16 @@ pub(super) fn run(
     thread::spawn(move || pump_thread(shared_for_pump, ready_tx));
 
     // Wait until the transcript is actually published (or the worker reports
-    // why it could not) before injecting the chord.
-    match ready_rx.recv() {
+    // why it could not) before injecting the chord. Bounded: a pump thread
+    // stuck on window creation or on another app's open clipboard must fall
+    // back to the legacy path, never strand the caller (the overlay would sit
+    // on "Transkribiere..." forever with no log output).
+    match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
         Ok(Ok(())) => {}
         Ok(Err(e)) => return Err(e),
-        Err(_) => return Err("reliable paste worker died before publishing".to_string()),
+        Err(_) => {
+            return Err("reliable paste worker did not publish within 5s; falling back".to_string())
+        }
     }
     info!("[reliable-paste] published transcript (delayed render)");
 
