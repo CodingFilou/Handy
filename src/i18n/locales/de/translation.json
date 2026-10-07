@@ -233,6 +233,29 @@
         }
       }
     },
+    "meeting": {
+      "title": "Meetings",
+      "save": {
+        "label": "Meeting-Transkripte speichern",
+        "description": "Nach jeder Meeting-Aufnahme (Meeting-Kürzel) eine Datei mit Zeitstempeln und Sprechern im Meeting-Ordner ablegen"
+      },
+      "folder": {
+        "title": "Meeting-Ordner",
+        "description": "Wo Meeting-Transkripte als „Meeting_JJJJ-MM-TT_HH-MM-SS.md“ landen. Leer = Standardordner im App-Verzeichnis",
+        "browse": "Wählen…",
+        "reset": "Standard",
+        "default": "Standard (App-Verzeichnis/meetings)"
+      },
+      "speakers": {
+        "title": "Sprecher-Namen",
+        "description": "So heißen die beiden Kanäle im Transkript: dein Mikrofon und der Computer-Sound (alle anderen). Echte Einzelsprecher-Trennung (A, B, C …) folgt später",
+        "mic": "Mikrofon (ich)",
+        "system": "System (andere)",
+        "micPlaceholder": "z. B. Sprecher A",
+        "systemPlaceholder": "z. B. Sprecher B"
+      },
+      "folderPickerTitle": "Meeting-Ordner wählen"
+    },
     "sound": {
       "title": "Ton",
       "microphone": {

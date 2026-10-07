@@ -136,6 +136,40 @@ const settingUpdaters: {
         ? "default"
         : (value as string),
     ),
+  meeting_folder: async (value) => {
+    const result = await commands.setMeetingFolder(
+      (value as string | null) ?? null,
+    );
+    if (result.status === "error") {
+      toast.error(result.error);
+      throw new Error(result.error);
+    }
+  },
+  save_meeting_transcripts: async (value) => {
+    const result = await commands.setSaveMeetingTranscripts(value as boolean);
+    if (result.status === "error") {
+      toast.error(result.error);
+      throw new Error(result.error);
+    }
+  },
+  speaker_mic_name: async (value) => {
+    const sysName =
+      useSettingsStore.getState().settings?.speaker_sys_name ?? "Sprecher B";
+    const result = await commands.setSpeakerNames(value as string, sysName);
+    if (result.status === "error") {
+      toast.error(result.error);
+      throw new Error(result.error);
+    }
+  },
+  speaker_sys_name: async (value) => {
+    const micName =
+      useSettingsStore.getState().settings?.speaker_mic_name ?? "Sprecher A";
+    const result = await commands.setSpeakerNames(micName, value as string);
+    if (result.status === "error") {
+      toast.error(result.error);
+      throw new Error(result.error);
+    }
+  },
   clamshell_microphone: (value) =>
     commands.setClamshellMicrophone(
       (value as string) === "Default" ? "default" : (value as string),
@@ -264,6 +298,11 @@ export const useSettingsStore = create<SettingsStore>()(
             audio_source: settings.audio_source ?? "microphone",
             selected_system_device:
               settings.selected_system_device ?? "Default",
+            meeting_folder: settings.meeting_folder ?? null,
+            save_meeting_transcripts:
+              settings.save_meeting_transcripts ?? true,
+            speaker_mic_name: settings.speaker_mic_name ?? "Sprecher A",
+            speaker_sys_name: settings.speaker_sys_name ?? "Sprecher B",
           };
           set({ settings: normalizedSettings, isLoading: false });
         } else {

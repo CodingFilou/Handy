@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod constants;
 pub mod lang_id;
+pub mod meeting;
 pub mod text;
 pub mod utils;
 pub mod vad;
@@ -12,6 +13,10 @@ pub use audio::{
     LoopbackRecorder, VadPolicy,
 };
 pub use lang_id::detect_output_language;
+pub use meeting::{
+    assign_speakers, format_meeting_markdown, format_meeting_text, format_timestamp,
+    meeting_file_stem, ChannelPresence, LabeledSegment, TimedSegment,
+};
 pub use text::{
     apply_custom_words, normalize_transcription_output, remove_filler_words, OutputLanguageEvidence,
 };

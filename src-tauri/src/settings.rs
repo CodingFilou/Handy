@@ -473,6 +473,20 @@ pub struct AppSettings {
     pub word_correction_threshold: f64,
     #[serde(default = "default_history_limit")]
     pub history_limit: usize,
+    /// Meeting transcription: folder where per-meeting transcript files are
+    /// saved. `None` = `<app_data>/meetings`. Set via the settings UI
+    /// (folder picker) — never hand-edited, so no validation here.
+    #[serde(default)]
+    pub meeting_folder: Option<String>,
+    /// Whether the meeting shortcut writes a timestamped transcript file.
+    #[serde(default = "default_true")]
+    pub save_meeting_transcripts: bool,
+    /// Display name for the microphone channel in meeting transcripts.
+    #[serde(default = "default_speaker_mic_name")]
+    pub speaker_mic_name: String,
+    /// Display name for the system-audio channel in meeting transcripts.
+    #[serde(default = "default_speaker_sys_name")]
+    pub speaker_sys_name: String,
     #[serde(default = "default_recording_retention_period")]
     pub recording_retention_period: RecordingRetentionPeriod,
     #[serde(default)]
@@ -661,6 +675,18 @@ fn default_auto_submit() -> bool {
 
 fn default_history_limit() -> usize {
     5
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_speaker_mic_name() -> String {
+    "Sprecher A".to_string()
+}
+
+fn default_speaker_sys_name() -> String {
+    "Sprecher B".to_string()
 }
 
 fn default_recording_retention_period() -> RecordingRetentionPeriod {
@@ -1008,6 +1034,10 @@ pub fn get_default_settings() -> AppSettings {
         model_unload_timeout: ModelUnloadTimeout::default(),
         word_correction_threshold: default_word_correction_threshold(),
         history_limit: default_history_limit(),
+        meeting_folder: None,
+        save_meeting_transcripts: true,
+        speaker_mic_name: default_speaker_mic_name(),
+        speaker_sys_name: default_speaker_sys_name(),
         recording_retention_period: default_recording_retention_period(),
         paste_method: PasteMethod::default(),
         clipboard_handling: ClipboardHandling::default(),

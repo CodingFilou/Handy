@@ -410,6 +410,73 @@ pub async fn set_audio_source(app: AppHandle, source: AudioSource) -> Result<(),
     Ok(())
 }
 
+/// Meeting transcript output settings (see `AppSettings`).
+#[derive(Serialize, Type)]
+pub struct MeetingSettings {
+    meeting_folder: Option<String>,
+    save_meeting_transcripts: bool,
+    speaker_mic_name: String,
+    speaker_sys_name: String,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_meeting_settings(app: AppHandle) -> Result<MeetingSettings, String> {
+    let settings = get_settings(&app);
+    Ok(MeetingSettings {
+        meeting_folder: settings.meeting_folder,
+        save_meeting_transcripts: settings.save_meeting_transcripts,
+        speaker_mic_name: settings.speaker_mic_name,
+        speaker_sys_name: settings.speaker_sys_name,
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_meeting_folder(app: AppHandle, folder: Option<String>) -> Result<(), String> {
+    // Empty string from the picker-clear button means "back to default".
+    let folder = folder.filter(|f| !f.trim().is_empty());
+    if let Some(ref path) = folder {
+        std::fs::create_dir_all(path)
+            .map_err(|e| format!("Meeting-Ordner kann nicht erstellt werden: {e}"))?;
+    }
+    let mut settings = get_settings(&app);
+    settings.meeting_folder = folder;
+    write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_save_meeting_transcripts(app: AppHandle, save: bool) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.save_meeting_transcripts = save;
+    write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_speaker_names(app: AppHandle, mic_name: String, sys_name: String) -> Result<(), String> {
+    // Blank names fall back to the defaults so transcripts never render an
+    // empty speaker.
+    let mic_name = mic_name.trim().to_string();
+    let sys_name = sys_name.trim().to_string();
+    let mut settings = get_settings(&app);
+    settings.speaker_mic_name = if mic_name.is_empty() {
+        "Sprecher A".to_string()
+    } else {
+        mic_name
+    };
+    settings.speaker_sys_name = if sys_name.is_empty() {
+        "Sprecher B".to_string()
+    } else {
+        sys_name
+    };
+    write_settings(&app, settings);
+    Ok(())
+}
+
 /// Whether this OS can capture system output without extra setup (Windows:
 /// native WASAPI loopback). The UI uses this to explain alternatives
 /// elsewhere (Linux "Monitor of …" input, macOS virtual device).

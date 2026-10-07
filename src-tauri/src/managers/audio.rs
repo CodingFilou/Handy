@@ -516,6 +516,16 @@ pub struct AudioRecordingManager {
     cached_device: Arc<Mutex<Option<(String, cpal::Device)>>>,
 }
 
+/// Per-channel result of stopping a recording. `mixed` is the historic
+/// mono mix fed to transcription; `mic`/`sys` are the raw unmixed 16 kHz
+/// buffers (`None` when that side was not open). Meeting transcription uses
+/// the channels for speaker attribution; everyone else keeps using `mixed`.
+pub struct RecordingChannels {
+    pub mixed: Vec<f32>,
+    pub mic: Option<Vec<f32>>,
+    pub sys: Option<Vec<f32>>,
+}
+
 impl AudioRecordingManager {
     /* ---------- construction ------------------------------------------------ */
 
@@ -1483,7 +1493,34 @@ impl AudioRecordingManager {
         self.cancel_generation.load(Ordering::Acquire) != generation
     }
 
+    pub fn stop_recording_with_channels(
+        &self,
+        binding_id: &str,
+        cancel_generation: u64,
+    ) -> Option<RecordingChannels> {
+        self.stop_recording_inner(binding_id, cancel_generation)
+    }
+
+    /// Historic stop: mixed mono samples, padded when very short.
     pub fn stop_recording(&self, binding_id: &str, cancel_generation: u64) -> Option<Vec<f32>> {
+        self.stop_recording_inner(binding_id, cancel_generation)
+            .map(|channels| {
+                let s_len = channels.mixed.len();
+                if s_len < WHISPER_SAMPLE_RATE && s_len > 0 {
+                    let mut padded = channels.mixed;
+                    padded.resize(WHISPER_SAMPLE_RATE * 5 / 4, 0.0);
+                    padded
+                } else {
+                    channels.mixed
+                }
+            })
+    }
+
+    fn stop_recording_inner(
+        &self,
+        binding_id: &str,
+        cancel_generation: u64,
+    ) -> Option<RecordingChannels> {
         self.invalidate_recording_readiness();
         let mut state = self.state.lock().unwrap();
 
@@ -1556,17 +1593,17 @@ impl AudioRecordingManager {
                 if let Some(mixer) = self.live_mixer.lock().unwrap().as_ref() {
                     mixer.flush();
                 }
-                let samples = match (mic_samples, sys_samples) {
+                let samples = match (&mic_samples, &sys_samples) {
                     (Some(mic), Some(sys)) => {
                         debug!(
                             "Mixing microphone ({} samples) and system audio ({} samples)",
                             mic.len(),
                             sys.len()
                         );
-                        mix_mono_16k(&mic, &sys)
+                        mix_mono_16k(mic, sys)
                     }
-                    (Some(mic), None) => mic,
-                    (None, Some(sys)) => sys,
+                    (Some(mic), None) => mic.clone(),
+                    (None, Some(sys)) => sys.clone(),
                     (None, None) => {
                         error!("Recorder not available");
                         Vec::new()
@@ -1591,16 +1628,14 @@ impl AudioRecordingManager {
                     return None;
                 }
 
-                // Pad if very short
-                let s_len = samples.len();
-                // debug!("Got {} samples", s_len);
-                if s_len < WHISPER_SAMPLE_RATE && s_len > 0 {
-                    let mut padded = samples;
-                    padded.resize(WHISPER_SAMPLE_RATE * 5 / 4, 0.0);
-                    Some(padded)
-                } else {
-                    Some(samples)
-                }
+                // `mixed` stays unpadded here: padding would shift segment
+                // timing for speaker attribution. The `stop_recording`
+                // wrapper pads for the historic transcription path.
+                Some(RecordingChannels {
+                    mixed: samples,
+                    mic: mic_samples,
+                    sys: sys_samples,
+                })
             }
             _ => None,
         }

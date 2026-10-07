@@ -233,6 +233,29 @@
       },
       "noModelsMatch": "No models match this filter."
     },
+    "meeting": {
+      "title": "Meetings",
+      "save": {
+        "label": "Save meeting transcripts",
+        "description": "After every meeting recording (meeting shortcut), write a timestamped, speaker-labeled file into the meeting folder"
+      },
+      "folder": {
+        "title": "Meeting folder",
+        "description": "Where meeting transcripts land as “Meeting_YYYY-MM-DD_HH-MM-SS.md”. Empty = default folder inside the app directory",
+        "browse": "Browse…",
+        "reset": "Default",
+        "default": "Default (app directory/meetings)"
+      },
+      "speakers": {
+        "title": "Speaker names",
+        "description": "How the two channels appear in the transcript: your microphone and the computer sound (everyone else). True per-person separation (A, B, C …) comes later",
+        "mic": "Microphone (me)",
+        "system": "System (others)",
+        "micPlaceholder": "e.g. Speaker A",
+        "systemPlaceholder": "e.g. Speaker B"
+      },
+      "folderPickerTitle": "Choose meeting folder"
+    },
     "sound": {
       "title": "Sound",
       "microphone": {

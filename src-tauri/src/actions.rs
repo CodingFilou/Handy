@@ -2,9 +2,10 @@
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
 use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error, VadPolicy};
-use crate::managers::audio::AudioRecordingManager;
+use crate::managers::audio::{AudioRecordingManager, RecordingChannels};
 use crate::managers::history::HistoryManager;
 use crate::managers::model::ModelManager;
+use crate::managers::transcription::DetailedTranscript;
 use crate::managers::transcription::StreamWorkKind;
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
@@ -350,6 +351,90 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
     }
 }
 
+/// Build the speaker-labeled meeting transcript, optionally write the
+/// timestamped markdown file, and return the plain-text version for
+/// paste/history.
+///
+/// Speaker attribution compares the microphone and system-audio channel
+/// energy per transcript segment (see `audio_toolkit::meeting`). Without
+/// segment times (engines without alignment) the whole utterance is labeled
+/// by overall channel energy. File writing honors `save_meeting_transcripts`
+/// / `meeting_folder`; labeling always happens (paste shows speakers too).
+fn write_meeting_transcript(
+    app: &AppHandle,
+    tm: &TranscriptionManager,
+    detailed: Option<&DetailedTranscript>,
+    channels: Option<&RecordingChannels>,
+    plain_text: &str,
+) -> anyhow::Result<String> {
+    use crate::audio_toolkit::meeting::{
+        assign_speakers, format_meeting_markdown, format_meeting_text, meeting_file_stem,
+        TimedSegment,
+    };
+    use chrono::{Datelike, Timelike};
+
+    let settings = get_settings(app);
+    let mic = channels.and_then(|ch| ch.mic.as_deref());
+    let sys = channels.and_then(|ch| ch.sys.as_deref());
+    let mixed_len = channels.map(|ch| ch.mixed.len()).unwrap_or(0);
+    let segments: Vec<TimedSegment> = match detailed {
+        Some(d) if !d.segments.is_empty() => d.segments.clone(),
+        _ => vec![TimedSegment {
+            t0_ms: 0,
+            t1_ms: (mixed_len.max(1) / 16) as i64,
+            text: plain_text.to_string(),
+        }],
+    };
+    let labeled = assign_speakers(
+        &segments,
+        mic,
+        sys,
+        &settings.speaker_mic_name,
+        &settings.speaker_sys_name,
+    );
+    let paste_text = format_meeting_text(&labeled);
+
+    if settings.save_meeting_transcripts {
+        let dir = match settings.meeting_folder.as_deref() {
+            Some(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
+            _ => crate::portable::app_data_dir(app).map(|d| d.join("meetings"))?,
+        };
+        std::fs::create_dir_all(&dir)?;
+        let now = chrono::Local::now();
+        let stem = meeting_file_stem(
+            now.year(),
+            now.month(),
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second(),
+        );
+        let secs = (mixed_len / 16_000) as u64;
+        let duration = format!("{}:{:02}", secs / 60, secs % 60);
+        let source = match (mic, sys) {
+            (Some(_), Some(_)) => "Mikrofon + Systemaudio",
+            (Some(_), None) => "Mikrofon",
+            (None, Some(_)) => "Systemaudio",
+            (None, None) => "Unbekannt",
+        };
+        let model = tm
+            .get_current_model()
+            .unwrap_or_else(|| settings.selected_model.clone());
+        let markdown = format_meeting_markdown(
+            &stem,
+            &now.format("%d.%m.%Y %H:%M").to_string(),
+            &duration,
+            &model,
+            source,
+            &labeled,
+        );
+        let path = dir.join(format!("{stem}.md"));
+        std::fs::write(&path, markdown)?;
+        log::info!("Meeting transcript saved to {:?}", path);
+    }
+    Ok(paste_text)
+}
+
 pub(crate) struct ProcessedTranscription {
     pub final_text: String,
     pub post_processed_text: Option<String>,
@@ -452,7 +537,10 @@ impl ShortcutAction for TranscribeAction {
         } else {
             VadPolicy::Offline
         };
-        if model_supports_streaming {
+        // The meeting shortcut never streams: its transcript is batch-built
+        // with segment times for speaker attribution (see `stop`). Capture
+        // is unaffected — live frames without a worker are a no-op feed.
+        if model_supports_streaming && binding_id != "transcribe_meeting" {
             tm.start_stream();
         }
         let plan_elapsed = plan_started.elapsed();
@@ -619,7 +707,17 @@ impl ShortcutAction for TranscribeAction {
             );
 
             let stop_recording_time = Instant::now();
-            if let Some(samples) = rm.stop_recording(&binding_id, cancel_generation) {
+            // Meeting recordings keep the per-channel buffers for speaker
+            // attribution; every other binding keeps the historic mixed path.
+            let is_meeting = binding_id == "transcribe_meeting";
+            let stopped: Option<(Vec<f32>, Option<RecordingChannels>)> = if is_meeting {
+                rm.stop_recording_with_channels(&binding_id, cancel_generation)
+                    .map(|channels| (channels.mixed.clone(), Some(channels)))
+            } else {
+                rm.stop_recording(&binding_id, cancel_generation)
+                    .map(|samples| (samples, None))
+            };
+            if let Some((samples, channels)) = stopped {
                 debug!(
                     "Recording stopped and samples retrieved in {:?}, sample count: {}",
                     stop_recording_time.elapsed(),
@@ -652,19 +750,26 @@ impl ShortcutAction for TranscribeAction {
                         crate::audio_toolkit::save_wav_file(&wav_path, &samples_for_wav)
                     });
 
-                    // Transcribe concurrently with WAV save. If a live stream was
-                    // running, finalize it and use its text (all audio was already
-                    // fed to the stream); otherwise batch-transcribe the samples.
+                    // Transcribe concurrently with WAV save. Meetings never ran
+                    // a live stream (see `start`), so they always
+                    // batch-transcribe with segment times for speaker
+                    // attribution. All other bindings prefer a finalized
+                    // stream and fall back to batch transcription.
                     let transcription_time = Instant::now();
-                    let transcription_result = match tm.finalize_stream() {
-                        // A finalized stream with usable text wins. An empty result
-                        // (no active stream, produced nothing, or the stream failed
-                        // or its worker crashed) falls back to a full batch
-                        // transcription of the same audio. A cancelled finalize is
-                        // surfaced instead, so a cancel never starts a batch run.
-                        Ok(Some(text)) if !text.trim().is_empty() => Ok(text),
-                        Ok(_) => tm.transcribe(samples),
-                        Err(err) => Err(err),
+                    let transcription_result = if is_meeting {
+                        tm.transcribe_detailed(samples)
+                            .map(|detailed| (detailed.text.clone(), Some(detailed)))
+                    } else {
+                        match tm.finalize_stream() {
+                            // A finalized stream with usable text wins. An empty result
+                            // (no active stream, produced nothing, or the stream failed
+                            // or its worker crashed) falls back to a full batch
+                            // transcription of the same audio. A cancelled finalize is
+                            // surfaced instead, so a cancel never starts a batch run.
+                            Ok(Some(text)) if !text.trim().is_empty() => Ok((text, None)),
+                            Ok(_) => tm.transcribe(samples).map(|text| (text, None)),
+                            Err(err) => Err(err),
+                        }
                     };
 
                     // Await WAV save and verify
@@ -699,7 +804,7 @@ impl ShortcutAction for TranscribeAction {
                     }
 
                     match transcription_result {
-                        Ok(transcription) => {
+                        Ok((transcription, detailed)) => {
                             debug!(
                                 "Transcription completed in {:?}: '{}'",
                                 transcription_time.elapsed(),
@@ -713,7 +818,7 @@ impl ShortcutAction for TranscribeAction {
                                     show_processing_overlay(&ah);
                                 }
                             }
-                            let Some(processed) = complete_unless_cancelled(
+                            let Some(mut processed) = complete_unless_cancelled(
                                 process_transcription_output(&ah, &transcription, post_process),
                                 || rm.was_cancelled_since(cancel_generation),
                             )
@@ -725,6 +830,29 @@ impl ShortcutAction for TranscribeAction {
                                 return;
                             };
 
+                            // Meeting binding: attribute speakers, write the
+                            // timestamped transcript file, and paste/save the
+                            // labeled text instead of the plain transcript.
+                            // (The meeting action never enables LLM
+                            // post-processing, so no rewrite can desync the
+                            // segment labels.)
+                            if is_meeting {
+                                match write_meeting_transcript(
+                                    &ah,
+                                    &tm,
+                                    detailed.as_ref(),
+                                    channels.as_ref(),
+                                    &transcription,
+                                ) {
+                                    Ok(labeled) => {
+                                        processed.final_text = labeled;
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to write meeting transcript: {e:#}");
+                                    }
+                                }
+                            }
+
                             if rm.was_cancelled_since(cancel_generation) {
                                 debug!("Transcription operation cancelled before paste");
                                 utils::hide_recording_overlay(&ah);
@@ -732,11 +860,17 @@ impl ShortcutAction for TranscribeAction {
                                 return;
                             }
 
-                            // Save to history if WAV was saved
+                            // Save to history if WAV was saved. Meetings store
+                            // the speaker-labeled text (same as pasted).
                             if wav_saved {
+                                let history_text = if is_meeting {
+                                    processed.final_text.clone()
+                                } else {
+                                    transcription
+                                };
                                 if let Err(err) = hm.save_entry(
                                     file_name,
-                                    transcription,
+                                    history_text,
                                     post_process,
                                     processed.post_processed_text.clone(),
                                     processed.post_process_prompt.clone(),

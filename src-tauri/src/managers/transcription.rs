@@ -1,6 +1,6 @@
 use crate::audio_toolkit::{
     apply_custom_words, detect_output_language, normalize_transcription_output,
-    remove_filler_words, OutputLanguageEvidence,
+    remove_filler_words, OutputLanguageEvidence, TimedSegment,
 };
 use crate::chinese_script::{convert_chinese_script, ChineseVariety};
 use crate::engine_supervisor::{
@@ -24,7 +24,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_specta::Event;
-use transcribe_cpp::{Backend, RunExtension, RunOptions, StreamOptions, Task, WhisperRunOptions};
+use transcribe_cpp::{
+    Backend, RunExtension, RunOptions, StreamOptions, Task, TimestampKind, WhisperRunOptions,
+};
 use transcribe_rs::{
     onnx::{
         canary::CanaryModel,
@@ -1126,6 +1128,18 @@ impl TranscriptionManager {
     }
 
     pub fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
+        Ok(self.transcribe_impl(audio, false)?.text)
+    }
+
+    /// Batch transcription with timed segments for meeting transcripts.
+    /// `text` is the same post-processed output [`Self::transcribe`] returns;
+    /// `segments` carries model timestamps (empty on engines without word or
+    /// segment alignment, e.g. the ONNX path).
+    pub fn transcribe_detailed(&self, audio: Vec<f32>) -> Result<DetailedTranscript> {
+        self.transcribe_impl(audio, true)
+    }
+
+    fn transcribe_impl(&self, audio: Vec<f32>, detailed: bool) -> Result<DetailedTranscript> {
         #[cfg(debug_assertions)]
         if std::env::var("HANDY_FORCE_TRANSCRIPTION_FAILURE").is_ok() {
             return Err(anyhow::anyhow!(
@@ -1187,10 +1201,21 @@ impl TranscriptionManager {
 
         // Perform transcription with the appropriate engine.
         let run = match self.engine.loaded() {
-            Some(info) => {
-                self.transcribe_cpp(info, audio, &settings, &validated_language, &active_model)?
-            }
-            None => self.transcribe_onnx(&audio, &settings, &validated_language, &active_model)?,
+            Some(info) => self.transcribe_cpp(
+                info,
+                audio,
+                &settings,
+                &validated_language,
+                &active_model,
+                detailed,
+            )?,
+            None => self.transcribe_onnx(
+                &audio,
+                &settings,
+                &validated_language,
+                &active_model,
+                detailed,
+            )?,
         };
 
         let output_language = with_model_detected_language(
@@ -1216,6 +1241,24 @@ impl TranscriptionManager {
             &output_language,
             &run.languages,
         );
+
+        // Same post-processing per segment so labels and text agree. Segments
+        // reduced to filler-only text are dropped (they would render as gaps).
+        let filtered_segments: Vec<TimedSegment> = run
+            .segments
+            .into_iter()
+            .map(|mut seg| {
+                seg.text = post_process_transcription_text(
+                    std::mem::take(&mut seg.text),
+                    &settings,
+                    run.model_is_whisper,
+                    &output_language,
+                    &run.languages,
+                );
+                seg
+            })
+            .filter(|seg| !seg.text.trim().is_empty())
+            .collect();
 
         let et = std::time::Instant::now();
         let translation_note = if settings.translate_to_english {
@@ -1247,7 +1290,10 @@ impl TranscriptionManager {
 
         self.maybe_unload_immediately("transcription");
 
-        Ok(final_result)
+        Ok(DetailedTranscript {
+            text: final_result,
+            segments: filtered_segments,
+        })
     }
 
     /// transcribe-cpp: the model runs in the engine's worker process, which
@@ -1263,6 +1309,7 @@ impl TranscriptionManager {
         settings: &AppSettings,
         validated_language: &str,
         active_model: &str,
+        detailed: bool,
     ) -> Result<RunOutcome> {
         // Whether the model advertises Feature::InitialPrompt. Informational
         // (logged below); the whisper run extension and the fuzzy-correction
@@ -1308,6 +1355,14 @@ impl TranscriptionManager {
             task: run_plan.task,
             language: run_plan.language,
             target_language: run_plan.target_language,
+            // Meeting transcripts need segment times for speaker attribution.
+            // The default path keeps `Auto` (behavior unchanged); only the
+            // detailed run pins segment granularity.
+            timestamps: if detailed {
+                TimestampKind::Segment
+            } else {
+                TimestampKind::Auto
+            },
             family,
             ..Default::default()
         };
@@ -1332,6 +1387,15 @@ impl TranscriptionManager {
         };
         Ok(RunOutcome {
             text: transcript.text,
+            segments: transcript
+                .segments
+                .into_iter()
+                .map(|seg| TimedSegment {
+                    t0_ms: seg.t0_ms,
+                    t1_ms: seg.t1_ms,
+                    text: seg.text,
+                })
+                .collect(),
             languages,
             applied_language_hint,
             output_was_translated,
@@ -1349,6 +1413,7 @@ impl TranscriptionManager {
         settings: &AppSettings,
         validated_language: &str,
         active_model: &str,
+        _detailed: bool,
     ) -> Result<RunOutcome> {
         let languages = self
             .model_manager
@@ -1499,6 +1564,9 @@ impl TranscriptionManager {
         };
         Ok(RunOutcome {
             text,
+            // The ONNX engines report no alignment: meeting transcripts fall
+            // back to whole-utterance speaker labeling (see `assign_speakers`).
+            segments: Vec::new(),
             languages,
             applied_language_hint,
             output_was_translated,
@@ -1508,10 +1576,22 @@ impl TranscriptionManager {
     }
 }
 
+/// Batch transcription result with timed segments (see
+/// [`TranscriptionManager::transcribe_detailed`]).
+#[derive(Debug, Clone, Default)]
+pub struct DetailedTranscript {
+    /// Same post-processed text [`TranscriptionManager::transcribe`] returns.
+    pub text: String,
+    /// Timed segments; empty when the engine reports no alignment.
+    pub segments: Vec<TimedSegment>,
+}
+
 /// What a batch transcription produced, plus what post-processing needs to
 /// know about how it was produced.
 struct RunOutcome {
     text: String,
+    /// Timed segments (only populated by engines with alignment support).
+    segments: Vec<TimedSegment>,
     /// The model's supported languages.
     languages: Vec<String>,
     applied_language_hint: Option<String>,
