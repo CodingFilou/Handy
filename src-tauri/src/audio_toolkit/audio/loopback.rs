@@ -535,6 +535,7 @@ pub(crate) mod wasapi {
     use rtrb::Producer;
     use std::sync::{atomic::AtomicBool, mpsc, Arc};
 
+    #[cfg(not(target_os = "windows"))]
     const UNSUPPORTED: &str = "System-audio capture is currently supported on Windows (WASAPI loopback). On Linux, choose the 'Monitor of …' input as your microphone; on macOS, route system audio through a virtual device.";
 
     /// One loopback candidate shown in the system-device picker.

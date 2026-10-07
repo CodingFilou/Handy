@@ -443,7 +443,7 @@ pub async fn get_available_system_devices() -> Result<Vec<AudioDevice>, String> 
             result.extend(devices.into_iter().enumerate().map(|(i, d)| AudioDevice {
                 index: i.to_string(),
                 name: d.name,
-                is_default: false, // The explicit default is handled separately
+                is_default: d.is_default,
             }));
 
             Ok::<_, String>(result)
