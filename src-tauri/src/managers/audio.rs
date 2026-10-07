@@ -1194,7 +1194,8 @@ impl AudioRecordingManager {
             if source_override.is_some_and(|o| o != configured)
                 || (effective == AudioSource::Both) != mixer_present
             {
-                self.rebuild_recorders_for(effective)?;
+                self.rebuild_recorders_for(effective)
+                    .map_err(|e| format!("{e}"))?;
             }
             // Opens the stream(s) in on-demand mode. In always-on mode the streams
             // are normally already open and this is a cheap aliveness check —
