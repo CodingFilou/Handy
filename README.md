@@ -1,5 +1,8 @@
 # Handy
 
+> [!NOTE]
+> This is a fork of [cjpais/Handy](https://github.com/cjpais/Handy) adding **system-audio transcription** (Windows WASAPI loopback: mic / system / both, meeting transcripts with speaker labels). Active work happens on [`feature/system-audio`](https://github.com/CodingFilou/Handy/tree/feature/system-audio) — `main` tracks upstream. Windows test builds: [Releases](https://github.com/CodingFilou/Handy/releases).
+
 [![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?style=for-the-badge&logo=discord&logoColor=white)](https://discord.com/invite/WVBeWsNXK4)
 
 **A free, open source, and extensible speech-to-text application that works completely offline.**
